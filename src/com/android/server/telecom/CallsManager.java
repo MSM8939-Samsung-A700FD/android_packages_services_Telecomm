@@ -653,6 +653,22 @@ public class CallsManager extends Call.ListenerBase implements VideoProviderProx
      * @param extras The optional extras Bundle passed with the intent used for the incoming call.
      */
     Call startOutgoingCall(Uri handle, PhoneAccountHandle phoneAccountHandle, Bundle extras) {
+        return startOutgoingCall(handle, phoneAccountHandle, extras, null);
+    }
+
+
+    /**
+     * Kicks off the first steps to creating an outgoing call so that InCallUI can launch.
+     *
+     * @param handle Handle to connect the call with.
+     * @param phoneAccountHandle The phone account which contains the component name of the
+     *        connection service to use for this call.
+     * @param extras The optional extras Bundle passed with the intent used for the incoming call.
+     * @param origin The string that contains the origin on the system where the call was
+     *               made.
+     */
+    Call startOutgoingCall(Uri handle, PhoneAccountHandle phoneAccountHandle, Bundle extras,
+                           String origin) {
         Call call = getNewOutgoingCall(handle);
 
         if (extras!=null) {
@@ -751,6 +767,10 @@ public class CallsManager extends Call.ListenerBase implements VideoProviderProx
                     phoneAccountHandle == null ? "no-handle" : phoneAccountHandle.toString());
         }
 
+        if (!TextUtils.isEmpty(origin)) {
+            extras.putString(PhoneConstants.EXTRA_CALL_ORIGIN, origin);
+        }
+
         call.setIntentExtras(extras);
 
         // Do not add the call if it is a potential MMI code.
@@ -799,10 +819,25 @@ public class CallsManager extends Call.ListenerBase implements VideoProviderProx
                 || mDockManager.isDocked());
         call.setVideoState(videoState);
 
+        if (speakerphoneOn) {
+            Log.i(this, "%s Starting with speakerphone as requested", call);
+        } else {
+            Log.i(this, "%s Starting with speakerphone because car is docked.", call);
+        }
+
+        final boolean useSpeakerWhenDocked = mContext.getResources().getBoolean(
+                R.bool.use_speaker_when_docked);
+
+        call.setStartWithSpeakerphoneOn(speakerphoneOn
+                || (useSpeakerWhenDocked && mDockManager.isDocked()));
+
         if (call.isEmergencyCall()) {
             // Emergency -- CreateConnectionProcessor will choose accounts automatically
             call.setTargetPhoneAccount(null);
         }
+
+        final boolean requireCallCapableAccountByHandle = mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_requireCallCapableAccountForHandle);
 
         if (call.getTargetPhoneAccount() != null || call.isEmergencyCall()) {
             if (!call.isEmergencyCall()) {
@@ -811,6 +846,13 @@ public class CallsManager extends Call.ListenerBase implements VideoProviderProx
             // If the account has been set, proceed to place the outgoing call.
             // Otherwise the connection will be initiated when the account is set by the user.
             call.startCreateConnection(mPhoneAccountRegistrar);
+        } else if (mPhoneAccountRegistrar.getCallCapablePhoneAccounts(
+                requireCallCapableAccountByHandle ? call.getHandle().getScheme() : null, false)
+                .isEmpty()) {
+            // If there are no call capable accounts, disconnect the call.
+            markCallAsDisconnected(call, new DisconnectCause(DisconnectCause.CANCELED,
+                    "No registered PhoneAccounts"));
+            markCallAsRemoved(call);
         }
     }
 
